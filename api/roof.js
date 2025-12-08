@@ -1,39 +1,99 @@
-// Roof Estimator Webhook for Vercel / Next.js
-// POST /api/roof
+//---------------------------------------------------------
+// 🔎 UNIVERSAL BODY DEBUGGER — NO MORE HIDDEN ERRORS
+//---------------------------------------------------------
 
-async function fakeMeasureRoofFromAddress(address) {
-  console.log("Demo measurement for address:", address);
-  return 20; // Demo: constant value
+console.log("🔥 RAW req.body:", req.body);
+console.log("🔥 typeof req.body:", typeof req.body);
+
+// Step 1: Ensure body is an object
+let body = req.body;
+
+try {
+  // GHL sometimes sends a JSON string instead of an object
+  if (typeof body === "string") {
+    console.log("🔥 Body is STRING — attempting JSON.parse…");
+    body = JSON.parse(body);
+  }
+} catch (err) {
+  console.error("❌ JSON.parse FAILED — raw body was:", req.body);
+  return res.status(400).json({
+    success: false,
+    error: "Invalid JSON received from GHL.",
+    raw: req.body
+  });
 }
 
-export default async function handler(req, res) {
-  try {
-    console.log("=== Roof Estimator Webhook Hit ===");
-    console.log("Method:", req.method);
-    console.log("URL:", req.url);
-    console.log("Headers:", req.headers);
-    console.log("Raw Body Received:", req.body);
+// Step 2: Guarantee body is at least an empty object
+if (!body || typeof body !== "object") {
+  console.error("❌ Body is not an object. Body received:", body);
+  return res.status(400).json({
+    success: false,
+    error: "Webhook body was empty or not an object.",
+    raw: req.body
+  });
+}
 
-    // Allow GET for health-check
-    if (req.method !== "POST") {
-      return res.status(200).json({
-        ok: true,
-        message: "Roof estimator online. Send POST with JSON body.",
-        method: req.method
-      });
+console.log("✅ PARSED BODY:", body);
+console.log("🔑 BODY KEYS:", Object.keys(body));
+
+// Step 3: Deep inspection — flatten all keys (helps detect nested fields)
+function flattenKeys(obj, prefix = "") {
+  let keys = [];
+  for (let key in obj) {
+    const full = prefix ? `${prefix}.${key}` : key;
+    keys.push(full);
+    if (typeof obj[key] === "object" && obj[key] !== null) {
+      keys = keys.concat(flattenKeys(obj[key], full));
     }
+  }
+  return keys;
+}
 
-    // Parse body safely
-    let body = req.body || {};
-    if (typeof body === "string") {
-      try { body = JSON.parse(body); }
-      catch (e) {
-        console.log("JSON Parse Error:", e);
-        return res.status(400).json({ success: false, error: "Invalid JSON body." });
-      }
+console.log("🔎 ALL NESTED KEYS FOUND:", flattenKeys(body));
+
+//---------------------------------------------------------
+// 🔎 Extract fields with fallback for wrong casing or nesting
+//---------------------------------------------------------
+
+function findField(obj, possibleKeys) {
+  for (const key of possibleKeys) {
+    // direct hit
+    if (obj[key] !== undefined) return obj[key];
+
+    // nested hit (body.contact.jobType)
+    const parts = key.split(".");
+    let cur = obj;
+    for (const p of parts) {
+      cur = cur?.[p];
     }
+    if (cur !== undefined) return cur;
+  }
+  return undefined;
+}
 
-    console.log("Parsed Body:", body);
+const jobType = findField(body, [
+  "jobType",
+  "job_type",
+  "JobType",
+  "contact.jobType",
+  "contact.job_type",
+  "contact.JobType"
+]);
+
+console.log("🚨 FINAL jobType VALUE FOUND:", jobType);
+
+// If STILL missing → GHL is not sending it at all.
+if (!jobType) {
+  return res.status(400).json({
+    success: false,
+    error: "jobType is missing from webhook payload.",
+    receivedKeys: flattenKeys(body),
+    fullBody: body
+  });
+}
+
+const cleanJobType = jobType.toString().trim();
+console.log("✨ CLEAN jobType:", cleanJobType);
 
     // ⭐⭐⭐ NEW: Try every possible field GHL might be using
     const jobType =
