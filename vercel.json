@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "routes": [
+    {
+      "src": "/api/roof",
+      "methods": ["GET", "POST"],
+      "dest": "/api/roof.js"
+    }
+  ]
+}
