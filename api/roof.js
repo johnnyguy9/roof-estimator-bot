@@ -1,39 +1,38 @@
 export default async function handler(req, res) {
   try {
     console.log("🔥 RAW req.body:", req.body);
-    console.log("🔥 typeof req.body:", typeof req.body);
-
-    // Step 1: Ensure body is an object
     let body = req.body;
 
-    try {
-      if (typeof body === "string") {
-        console.log("🔥 Body is STRING — attempting JSON.parse…");
+    //---------------------------------------------
+    // Ensure JSON object
+    //---------------------------------------------
+    if (typeof body === "string") {
+      try {
+        console.log("🔥 Body is STRING — parsing…");
         body = JSON.parse(body);
+      } catch (err) {
+        console.error("❌ JSON.parse failed:", err);
+        return res.status(400).json({
+          success: false,
+          error: "Invalid JSON body.",
+          raw: req.body
+        });
       }
-    } catch (err) {
-      console.error("❌ JSON.parse FAILED — raw body was:", req.body);
-      return res.status(400).json({
-        success: false,
-        error: "Invalid JSON received from GHL.",
-        raw: req.body
-      });
     }
 
-    // Guarantee object
     if (!body || typeof body !== "object") {
-      console.error("❌ Body is not an object. Body received:", body);
       return res.status(400).json({
         success: false,
-        error: "Webhook body was empty or not an object.",
+        error: "Body is not an object.",
         raw: req.body
       });
     }
 
     console.log("✅ PARSED BODY:", body);
-    console.log("🔑 BODY KEYS:", Object.keys(body));
 
+    //---------------------------------------------
     // Deep key flattener
+    //---------------------------------------------
     function flattenKeys(obj, prefix = "") {
       let keys = [];
       for (let key in obj) {
@@ -46,63 +45,120 @@ export default async function handler(req, res) {
       return keys;
     }
 
-    console.log("🔎 ALL NESTED KEYS FOUND:", flattenKeys(body));
+    const allKeys = flattenKeys(body);
+    console.log("🔎 ALL KEYS:", allKeys);
 
-    // Field extractor
-    function findField(obj, possibleKeys) {
-      for (const key of possibleKeys) {
-        if (obj[key] !== undefined) return obj[key];
-        const parts = key.split(".");
-        let cur = obj;
-        for (const p of parts) cur = cur?.[p];
-        if (cur !== undefined) return cur;
+    //---------------------------------------------
+    // UNIVERSAL FIELD RESOLVER (fuzzy matching)
+    //---------------------------------------------
+    function resolveField(possibleKeys) {
+      const normalized = key =>
+        key.replace(/[\s_]/g, "").toLowerCase();
+
+      const normalizedKeys = allKeys.map(k => ({
+        original: k,
+        norm: normalized(k)
+      }));
+
+      for (const pk of possibleKeys) {
+        const target = normalized(pk);
+
+        // Exact root match
+        if (body[pk] !== undefined) return body[pk];
+
+        // Fuzzy match anywhere in payload
+        for (const k of normalizedKeys) {
+          if (k.norm.endsWith(target)) {
+            const parts = k.original.split(".");
+            let val = body;
+            for (const p of parts) val = val?.[p];
+            if (val !== undefined) return val;
+          }
+        }
       }
       return undefined;
     }
 
-    const jobType = findField(body, [
+    //---------------------------------------------
+    // Extract fields using universal resolver
+    //---------------------------------------------
+    const jobType = resolveField([
       "jobType",
+      "Job Type",
       "job_type",
-      "JobType",
       "contact.jobType",
-      "contact.job_type",
-      "contact.JobType"
+      "customData.jobType",
+      "customData.Job Type"
     ]);
 
-    console.log("🚨 FINAL jobType VALUE FOUND:", jobType);
+    const roofType = resolveField([
+      "roofType",
+      "Roof Type",
+      "customData.roofType"
+    ]);
 
+    const stories = resolveField([
+      "stories",
+      "# of Stories",
+      "customData.stories",
+      "contact.stories"
+    ]);
+
+    let squares = resolveField([
+      "squares",
+      "Squares",
+      "customData.squares"
+    ]);
+
+    const address = resolveField([
+      "address",
+      "address1",
+      "contact.address1",
+      "customData.address"
+    ]);
+
+    console.log("✔ RESOLVED jobType:", jobType);
+    console.log("✔ RESOLVED roofType:", roofType);
+    console.log("✔ RESOLVED stories:", stories);
+    console.log("✔ RESOLVED squares:", squares);
+    console.log("✔ RESOLVED address:", address);
+
+    //---------------------------------------------
+    // REQUIRED FIELD: jobType
+    //---------------------------------------------
     if (!jobType) {
       return res.status(400).json({
         success: false,
-        error: "jobType is missing from webhook payload.",
-        receivedKeys: flattenKeys(body),
-        fullBody: body
+        error: "jobType is missing.",
+        receivedKeys: allKeys,
+        body
       });
     }
 
-    const cleanJobType = jobType.toString().trim();
-    console.log("✨ CLEAN jobType:", cleanJobType);
+    const cleanJobType = jobType.toString().trim().toLowerCase();
 
-    //
-    // --------------------- RETAIL ESTIMATOR LOGIC ---------------------
-    //
+    //---------------------------------------------
+    // Handle INSURANCE path
+    //---------------------------------------------
+    if (cleanJobType.includes("insurance")) {
+      return res.status(200).json({
+        success: true,
+        mode: "insurance",
+        needsEstimator: false,
+        message: "Insurance claim — route to Insurance Workflow."
+      });
+    }
 
-    const roofType = body.roofType;
-    const stories = body.stories;
-    let squares = body.squares;
-    const address = body.address;
-
-    const roofPricing = {
-      "1": 450,
-      "2": 550,
-      "3": 650
-    };
+    //---------------------------------------------
+    // RETAIL ESTIMATOR LOGIC
+    //---------------------------------------------
+    const pricing = { "1": 450, "2": 550, "3": 650 };
 
     let finalSquares = 0;
 
-    async function fakeMeasureRoofFromAddress(addr) {
-      console.log("Demo measurement for address:", addr);
-      return 20;
+    async function measure(addr) {
+      console.log("📏 Measuring roof for:", addr);
+      return 20; // stub for testing
     }
 
     if (squares) {
@@ -118,15 +174,14 @@ export default async function handler(req, res) {
       if (!address) {
         return res.status(400).json({
           success: false,
-          error: "Address required when squares is not provided."
+          error: "Address required when squares missing."
         });
       }
-      const measured = await fakeMeasureRoofFromAddress(address);
-      finalSquares = Math.ceil(measured);
+      finalSquares = Math.ceil(await measure(address));
     }
 
-    const pricePerSquare = roofPricing[stories];
-    const totalPrice = finalSquares * pricePerSquare;
+    const pps = pricing[stories];
+    const total = finalSquares * pps;
 
     return res.status(200).json({
       success: true,
@@ -136,19 +191,18 @@ export default async function handler(req, res) {
       roofType,
       stories,
       squares: finalSquares,
-      pricePerSquare,
-      totalPrice,
-      currency: "USD",
-      address: address || null,
-      message: "Estimated price generated successfully."
+      pricePerSquare: pps,
+      totalPrice: total,
+      address,
+      message: "Estimate calculated successfully."
     });
 
   } catch (err) {
-    console.error("Estimator error:", err);
+    console.error("SERVER ERROR:", err);
     return res.status(500).json({
       success: false,
-      error: "Internal server error.",
-      details: err.message || String(err)
+      error: "Server error",
+      details: err.message
     });
   }
 }
