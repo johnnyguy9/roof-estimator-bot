@@ -3,11 +3,11 @@
  * ---------------------------------
  * This endpoint ONLY calculates pricing.
  * Routing logic (Retail vs Insurance) lives in GHL.
- * GHL success condition depends on:
  *
+ * GHL ONLY reads:
  *   contact.total_estimate
  *
- * NOTHING else is required.
+ * NOTHING else matters to the workflow.
  */
 
 export default async function handler(req, res) {
@@ -22,13 +22,13 @@ export default async function handler(req, res) {
         body = JSON.parse(body);
       } catch {
         return res.status(200).json({
-          contact: { total_estimate: null }
+          "contact.total_estimate": null
         });
       }
     }
 
     //---------------------------------------------
-    // Extract fields (do NOT require any of them)
+    // Extract inputs (NONE are required)
     //---------------------------------------------
     const stories = Number(body?.stories) || 1;
     const providedSquares = Number(body?.squares);
@@ -103,13 +103,13 @@ export default async function handler(req, res) {
       const measured = await measureRoof(address);
       if (!measured) {
         return res.status(200).json({
-          contact: { total_estimate: null }
+          "contact.total_estimate": null
         });
       }
       squares = bufferSquares(measured);
     } else {
       return res.status(200).json({
-        contact: { total_estimate: null }
+        "contact.total_estimate": null
       });
     }
 
@@ -122,27 +122,15 @@ export default async function handler(req, res) {
     const totalEstimate = squares * pricePerSquare;
 
     //---------------------------------------------
-    // 🔑 GHL-CRITICAL RESPONSE
+    // 🔑 FINAL RESPONSE — EXACTLY WHAT GHL NEEDS
     //---------------------------------------------
     return res.status(200).json({
-      success: true,
-
-      // THIS is what your workflow condition reads
-      contact: {
-        total_estimate: totalEstimate
-      },
-
-      // Optional debug (safe to ignore in GHL)
-      squares,
-      stories,
-      pricePerSquare,
-      measurementMethod: providedSquares ? "manual" : "google_solar_api_buffered",
-      timestamp: new Date().toISOString()
+      "contact.total_estimate": totalEstimate
     });
 
-  } catch (err) {
+  } catch {
     return res.status(200).json({
-      contact: { total_estimate: null }
+      "contact.total_estimate": null
     });
   }
 }
