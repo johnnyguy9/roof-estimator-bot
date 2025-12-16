@@ -4,32 +4,50 @@
  */
 
 export default async function handler(req, res) {
+  console.log("===== ROOF ESTIMATOR HIT =====");
+
   if (req.method !== "POST") {
+    console.log("Invalid method:", req.method);
     return res.status(200).json({ ok: false, reason: "POST only" });
   }
 
   try {
+    // ---------- PARSE BODY ----------
     let body = req.body;
     if (typeof body === "string") {
       body = JSON.parse(body);
     }
 
+    console.log("INCOMING BODY:", JSON.stringify(body, null, 2));
+
+    // ---------- CONTACT ID ----------
     const contactId =
       body?.contact_id ||
       body?.contactId ||
-      body?.contact?.id;
+      body?.contact?.id ||
+      body?.contact?.contact_id;
 
     if (!contactId) {
+      console.log("❌ Missing contact_id");
       return res.status(200).json({ ok: false, reason: "Missing contact_id" });
     }
 
+    console.log("CONTACT ID:", contactId);
+
+    // ---------- INPUTS ----------
     const address =
       body?.address ||
-      body?.contact?.address1;
+      body?.contact?.address1 ||
+      body?.contact?.full_address;
 
     const stories = normalizeStories(body?.stories);
     const providedSquares = normalizeSquares(body?.squares);
 
+    console.log("ADDRESS:", address);
+    console.log("STORIES:", stories);
+    console.log("PROVIDED SQUARES:", providedSquares);
+
+    // ---------- PRICING ----------
     const PRICE_PER_SQUARE = {
       1: 500,
       2: 575,
@@ -38,16 +56,19 @@ export default async function handler(req, res) {
 
     let finalSquares;
 
+    // ---------- SQUARE LOGIC ----------
     if (providedSquares) {
       finalSquares = providedSquares;
     } else {
       if (!address) {
+        console.log("⚠️ No address, skipping update");
         await updateGhlTotalEstimate(contactId, "");
         return res.status(200).json({ ok: true, updated: false });
       }
 
       const measured = await measureRoofSquaresFromSolar(address);
       if (!measured) {
+        console.log("⚠️ Solar measurement failed");
         await updateGhlTotalEstimate(contactId, "");
         return res.status(200).json({ ok: true, updated: false });
       }
@@ -58,7 +79,10 @@ export default async function handler(req, res) {
     const pricePerSquare = PRICE_PER_SQUARE[stories] || PRICE_PER_SQUARE[1];
     const totalEstimate = roundCurrency(finalSquares * pricePerSquare);
 
-    // 🔑 THIS IS THE ENTIRE FIX
+    console.log("FINAL SQUARES:", finalSquares);
+    console.log("TOTAL ESTIMATE:", totalEstimate);
+
+    // ---------- GHL WRITE BACK ----------
     await updateGhlTotalEstimate(contactId, totalEstimate);
 
     return res.status(200).json({
@@ -70,6 +94,7 @@ export default async function handler(req, res) {
     });
 
   } catch (err) {
+    console.error("🔥 ERROR:", err);
     return res.status(200).json({
       ok: false,
       error: err.message
@@ -77,7 +102,7 @@ export default async function handler(req, res) {
   }
 }
 
-/* ---------------- HELPERS ---------------- */
+/* ================= HELPERS ================= */
 
 function normalizeStories(val) {
   const n = Number(val);
@@ -101,7 +126,7 @@ function roundCurrency(num) {
   return Number(num.toFixed(2));
 }
 
-/* -------- GOOGLE SOLAR -------- */
+/* ================= GOOGLE SOLAR ================= */
 
 async function measureRoofSquaresFromSolar(address) {
   const key = process.env.GOOGLE_MAPS_API_KEY;
@@ -130,13 +155,16 @@ async function measureRoofSquaresFromSolar(address) {
   return Math.ceil(sqft / 100);
 }
 
-/* -------- GHL WRITE BACK -------- */
+/* ================= GHL WRITE BACK ================= */
 
 async function updateGhlTotalEstimate(contactId, total) {
   const token = process.env.GHL_PRIVATE_TOKEN;
-  const fieldKey = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY || "total_estimate";
+  const fieldKey = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY;
 
-  if (!token) throw new Error("Missing GHL token");
+  if (!token) throw new Error("Missing GHL_PRIVATE_TOKEN");
+  if (!fieldKey) throw new Error("Missing GHL_TOTAL_ESTIMATE_FIELD_KEY");
+
+  console.log("WRITING TO GHL:", { contactId, fieldKey, total });
 
   const resp = await fetch(
     `https://services.leadconnectorhq.com/contacts/${contactId}`,
@@ -156,7 +184,9 @@ async function updateGhlTotalEstimate(contactId, total) {
   );
 
   if (!resp.ok) {
-    const t = await resp.text();
-    throw new Error(`GHL update failed ${resp.status}: ${t}`);
+    const text = await resp.text();
+    throw new Error(`GHL update failed ${resp.status}: ${text}`);
   }
+
+  console.log("✅ GHL UPDATE SUCCESS");
 }
