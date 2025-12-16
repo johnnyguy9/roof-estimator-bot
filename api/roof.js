@@ -3,39 +3,35 @@
  * ---------------------------------
  * PURPOSE:
  * - Measure roof (manual squares OR Google Solar)
- * - Apply buffer
  * - Calculate price
- * - Return ONE flat field GHL can read
+ * - Update GHL Contact field: total_estimate
  *
- * GHL ONLY reads top-level keys.
+ * GHL ONLY reads values under `contact`
  */
 
 export default async function handler(req, res) {
   try {
     let body = req.body;
 
-    // Handle GHL sending stringified JSON
     if (typeof body === "string") {
       try {
         body = JSON.parse(body);
       } catch {
-        return res.status(200).json({ total_estimate: null });
+        return res.status(200).json({ contact: { total_estimate: null } });
       }
     }
 
-    // Inputs from GHL
     const stories = Number(body?.stories) || 1;
     const providedSquares = Number(body?.squares);
     const address = body?.address;
 
-    // 🔒 PRICING — LOCKED (do not change)
+    // 🔒 PRICING — DO NOT CHANGE
     const PRICE_PER_SQUARE = {
       1: 500,
       2: 575,
       3: 650
     };
 
-    // Google Solar roof measurement
     async function measureRoof(addr) {
       try {
         const key = process.env.GOOGLE_MAPS_API_KEY;
@@ -73,14 +69,12 @@ export default async function handler(req, res) {
       }
     }
 
-    // Buffer to protect under-measurement
     function bufferSquares(sq) {
       if (sq <= 15) return sq + 3;
       if (sq <= 25) return sq + 4;
       return sq + 5;
     }
 
-    // Determine square count
     let squares;
 
     if (!isNaN(providedSquares) && providedSquares > 0) {
@@ -88,25 +82,28 @@ export default async function handler(req, res) {
     } else if (address) {
       const measured = await measureRoof(address);
       if (!measured) {
-        return res.status(200).json({ total_estimate: null });
+        return res.status(200).json({ contact: { total_estimate: null } });
       }
       squares = bufferSquares(measured);
     } else {
-      return res.status(200).json({ total_estimate: null });
+      return res.status(200).json({ contact: { total_estimate: null } });
     }
 
-    // Price calculation
     const pricePerSquare =
       PRICE_PER_SQUARE[String(stories)] || PRICE_PER_SQUARE["1"];
 
     const totalEstimate = squares * pricePerSquare;
 
-    // ✅ ONLY FIELD GHL NEEDS
+    // ✅ THIS IS THE CRITICAL PART
     return res.status(200).json({
-      total_estimate: totalEstimate
+      contact: {
+        total_estimate: totalEstimate
+      }
     });
 
   } catch {
-    return res.status(200).json({ total_estimate: null });
+    return res.status(200).json({
+      contact: { total_estimate: null }
+    });
   }
 }
