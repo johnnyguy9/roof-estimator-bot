@@ -7,16 +7,13 @@ export default async function handler(req, res) {
   console.log("===== ROOF ESTIMATOR HIT =====");
 
   if (req.method !== "POST") {
-    console.log("Invalid method:", req.method);
     return res.status(200).json({ ok: false, reason: "POST only" });
   }
 
   try {
     // ---------- PARSE BODY ----------
     let body = req.body;
-    if (typeof body === "string") {
-      body = JSON.parse(body);
-    }
+    if (typeof body === "string") body = JSON.parse(body);
 
     console.log("INCOMING BODY:", JSON.stringify(body, null, 2));
 
@@ -31,8 +28,6 @@ export default async function handler(req, res) {
       console.log("❌ Missing contact_id");
       return res.status(200).json({ ok: false, reason: "Missing contact_id" });
     }
-
-    console.log("CONTACT ID:", contactId);
 
     // ---------- INPUTS ----------
     const address =
@@ -56,20 +51,17 @@ export default async function handler(req, res) {
 
     let finalSquares;
 
-    // ---------- SQUARE LOGIC ----------
     if (providedSquares) {
       finalSquares = providedSquares;
     } else {
       if (!address) {
-        console.log("⚠️ No address, skipping update");
-        await updateGhlTotalEstimate(contactId, "");
+        console.log("⚠️ No address — skipping GHL update");
         return res.status(200).json({ ok: true, updated: false });
       }
 
       const measured = await measureRoofSquaresFromSolar(address);
       if (!measured) {
         console.log("⚠️ Solar measurement failed");
-        await updateGhlTotalEstimate(contactId, "");
         return res.status(200).json({ ok: true, updated: false });
       }
 
@@ -79,26 +71,30 @@ export default async function handler(req, res) {
     const pricePerSquare = PRICE_PER_SQUARE[stories] || PRICE_PER_SQUARE[1];
     const totalEstimate = roundCurrency(finalSquares * pricePerSquare);
 
+    if (!Number.isFinite(totalEstimate)) {
+      console.log("⚠️ Invalid estimate — aborting write");
+      return res.status(200).json({ ok: true, updated: false });
+    }
+
     console.log("FINAL SQUARES:", finalSquares);
     console.log("TOTAL ESTIMATE:", totalEstimate);
 
     // ---------- GHL WRITE BACK ----------
-    await updateGhlTotalEstimate(contactId, totalEstimate);
+    const ghlResponse = await updateGhlTotalEstimate(contactId, totalEstimate);
 
     return res.status(200).json({
       ok: true,
+      updated: true,
       contactId,
       total_estimate: totalEstimate,
       squares: finalSquares,
-      stories
+      stories,
+      ghl: ghlResponse
     });
 
   } catch (err) {
     console.error("🔥 ERROR:", err);
-    return res.status(200).json({
-      ok: false,
-      error: err.message
-    });
+    return res.status(200).json({ ok: false, error: err.message });
   }
 }
 
@@ -151,8 +147,7 @@ async function measureRoofSquaresFromSolar(address) {
   const totalM2 = segments.reduce((s, r) => s + (r.areaMeters2 || 0), 0);
   if (!totalM2) return null;
 
-  const sqft = totalM2 * 10.7639;
-  return Math.ceil(sqft / 100);
+  return Math.ceil((totalM2 * 10.7639) / 100);
 }
 
 /* ================= GHL WRITE BACK ================= */
@@ -169,24 +164,26 @@ async function updateGhlTotalEstimate(contactId, total) {
   const resp = await fetch(
     `https://services.leadconnectorhq.com/contacts/${contactId}`,
     {
-      method: "PUT",
+      method: "PATCH", // ✅ REQUIRED
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         Version: "2021-07-28"
       },
       body: JSON.stringify({
-        customFields: [
-          { key: fieldKey, value: String(total) }
-        ]
+        customFields: {
+          [fieldKey]: Number(total) // ✅ MUST be number
+        }
       })
     }
   );
 
+  const data = await resp.json();
+  console.log("GHL RESPONSE:", data);
+
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`GHL update failed ${resp.status}: ${text}`);
+    throw new Error(`GHL update failed ${resp.status}: ${JSON.stringify(data)}`);
   }
 
-  console.log("✅ GHL UPDATE SUCCESS");
+  return data;
 }
