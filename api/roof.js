@@ -2,22 +2,27 @@
  * GHL Roof Estimator Webhook
  * ---------------------------------
  * PURPOSE:
- * - Measure roof (manual squares OR Google Solar)
+ * - Measure roof (Google Solar OR manual squares)
  * - Calculate price
- * - Update GHL Contact field: total_estimate
+ * - Return value DIRECTLY into Contact field
  *
- * GHL ONLY reads values under `contact`
+ * IMPORTANT:
+ * Your GHL account does NOT support response mapping.
+ * This MUST return contact.total_estimate
  */
 
 export default async function handler(req, res) {
   try {
     let body = req.body;
 
+    // Safely parse body
     if (typeof body === "string") {
       try {
         body = JSON.parse(body);
       } catch {
-        return res.status(200).json({ contact: { total_estimate: null } });
+        return res.status(200).json({
+          contact: { total_estimate: null }
+        });
       }
     }
 
@@ -25,13 +30,14 @@ export default async function handler(req, res) {
     const providedSquares = Number(body?.squares);
     const address = body?.address;
 
-    // 🔒 PRICING — DO NOT CHANGE
+    // 🔒 PRICING — RESTORED TO ORIGINAL
     const PRICE_PER_SQUARE = {
       1: 500,
       2: 575,
       3: 650
     };
 
+    // Google Solar measurement
     async function measureRoof(addr) {
       try {
         const key = process.env.GOOGLE_MAPS_API_KEY;
@@ -69,6 +75,7 @@ export default async function handler(req, res) {
       }
     }
 
+    // Buffer logic
     function bufferSquares(sq) {
       if (sq <= 15) return sq + 3;
       if (sq <= 25) return sq + 4;
@@ -82,11 +89,15 @@ export default async function handler(req, res) {
     } else if (address) {
       const measured = await measureRoof(address);
       if (!measured) {
-        return res.status(200).json({ contact: { total_estimate: null } });
+        return res.status(200).json({
+          contact: { total_estimate: null }
+        });
       }
       squares = bufferSquares(measured);
     } else {
-      return res.status(200).json({ contact: { total_estimate: null } });
+      return res.status(200).json({
+        contact: { total_estimate: null }
+      });
     }
 
     const pricePerSquare =
@@ -94,7 +105,7 @@ export default async function handler(req, res) {
 
     const totalEstimate = squares * pricePerSquare;
 
-    // ✅ THIS IS THE CRITICAL PART
+    // ✅ THIS IS WHAT YOUR GHL ACCOUNT REQUIRES
     return res.status(200).json({
       contact: {
         total_estimate: totalEstimate
