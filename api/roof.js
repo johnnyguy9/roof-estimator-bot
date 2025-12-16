@@ -1,15 +1,6 @@
 /**
- * Roof Estimation API Handler
- * 
- * Generates retail roofing estimates using:
- * - Manual squares (if provided)
- * - Google Solar API roof measurement + buffer (if not)
- * 
- * CRITICAL:
- * Writes total estimate back to GHL contact field:
- * contact.total_estimate_
+ * Roof Estimation API Handler (GHL Compatible)
  */
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({
@@ -19,253 +10,151 @@ export default async function handler(req, res) {
   }
 
   try {
-    // -----------------------------
-    // Parse request body
-    // -----------------------------
-    let body = req.body;
+    const body = typeof req.body === "string"
+      ? JSON.parse(req.body)
+      : req.body;
 
-    if (typeof body === "string") {
-      try {
-        body = JSON.parse(body);
-      } catch {
-        return res.status(400).json({
-          success: false,
-          error: "Invalid JSON body."
-        });
-      }
-    }
-
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
+    if (!body || typeof body !== "object") {
       return res.status(400).json({
         success: false,
-        error: "Request body must be a JSON object."
+        error: "Invalid JSON body"
       });
     }
 
-    // -----------------------------
-    // Helpers
-    // -----------------------------
-    function flattenKeys(obj, prefix = "") {
-      let keys = [];
-      for (const key in obj) {
-        if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
-        const full = prefix ? `${prefix}.${key}` : key;
-        keys.push(full);
-        if (obj[key] && typeof obj[key] === "object" && !Array.isArray(obj[key])) {
-          keys = keys.concat(flattenKeys(obj[key], full));
-        }
-      }
-      return keys;
-    }
+    /* ----------------------------
+       FIELD RESOLUTION
+    -----------------------------*/
+    const jobType   = body.jobType   || body.job_type;
+    const roofType  = body.roofType;
+    const stories   = Number(body.stories || 1);
+    const squaresIn = body.squares;
+    const address   = body.address;
 
-    function getNestedValue(obj, path) {
-      return path.split(".").reduce((o, p) => o?.[p], obj);
-    }
-
-    function resolveField(body, allKeys, possibleKeys) {
-      const normalize = k => k.replace(/[\s_-]/g, "").toLowerCase();
-
-      const normalizedKeys = allKeys.map(k => ({
-        original: k,
-        norm: normalize(k)
-      }));
-
-      for (const pk of possibleKeys) {
-        const target = normalize(pk);
-
-        if (body[pk] !== undefined && body[pk] !== null && body[pk] !== "") {
-          return body[pk];
-        }
-
-        for (const k of normalizedKeys) {
-          if (k.norm === target || k.norm.endsWith("." + target)) {
-            const val = getNestedValue(body, k.original);
-            if (val !== undefined && val !== null && val !== "") return val;
-          }
-        }
-      }
-      return undefined;
-    }
-
-    // -----------------------------
-    // Extract fields
-    // -----------------------------
-    const allKeys = flattenKeys(body);
-
-    const fields = {
-      jobType: resolveField(body, allKeys, [
-        "jobType",
-        "job_type",
-        "type",
-        "customData.jobType"
-      ]),
-      roofType: resolveField(body, allKeys, [
-        "roofType",
-        "roof_type",
-        "customData.roofType"
-      ]),
-      stories: resolveField(body, allKeys, [
-        "stories",
-        "story",
-        "customData.stories"
-      ]),
-      squares: resolveField(body, allKeys, [
-        "squares",
-        "square",
-        "customData.squares"
-      ]),
-      address: resolveField(body, allKeys, [
-        "address",
-        "address1",
-        "street_address",
-        "contact.address1",
-        "customData.address"
-      ])
-    };
-
-    if (!fields.jobType) {
+    if (!jobType) {
       return res.status(400).json({
         success: false,
-        error: "jobType is required."
+        error: "jobType is required"
       });
     }
 
-    const jobType = String(fields.jobType).trim().toLowerCase();
-
-    // -----------------------------
-    // Insurance routing
-    // -----------------------------
-    if (jobType.includes("insurance")) {
+    if (jobType.toLowerCase().includes("insurance")) {
       return res.status(200).json({
         success: true,
         mode: "insurance",
-        needsEstimator: false,
-        message: "Insurance claim detected."
+        needsEstimator: false
       });
     }
 
-    // -----------------------------
-    // Google Solar API measurement
-    // -----------------------------
+    /* ----------------------------
+       MEASUREMENT
+    -----------------------------*/
     async function measureRoof(address) {
       const apiKey = process.env.GOOGLE_MAPS_API_KEY;
       if (!apiKey) return null;
 
-      try {
-        const geoRes = await fetch(
-          `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`
-        );
-        const geoData = await geoRes.json();
-        if (geoData.status !== "OK") return null;
+      const geo = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`
+      ).then(r => r.json());
 
-        const { lat, lng } = geoData.results[0].geometry.location;
+      if (geo.status !== "OK") return null;
 
-        const solarRes = await fetch(
-          `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${lat}&location.longitude=${lng}&key=${apiKey}`
-        );
-        const solarData = await solarRes.json();
+      const { lat, lng } = geo.results[0].geometry.location;
 
-        const segments =
-          solarData?.solarPotential?.roofSegmentStats ||
-          solarData?.buildingInsights?.solarPotential?.roofSegmentStats;
+      const solar = await fetch(
+        `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${lat}&location.longitude=${lng}&key=${apiKey}`
+      ).then(r => r.json());
 
-        if (!segments?.length) return null;
+      const segments =
+        solar?.solarPotential?.roofSegmentStats ||
+        solar?.buildingInsights?.solarPotential?.roofSegmentStats;
 
-        const totalM2 = segments.reduce(
-          (sum, seg) => sum + (seg.stats?.areaMeters2 || seg.areaMeters2 || 0),
-          0
-        );
+      if (!segments?.length) return null;
 
-        const sqft = totalM2 * 10.7639;
-        return Math.ceil(sqft / 100);
+      const areaM2 = segments.reduce(
+        (s, seg) => s + (seg.stats?.areaMeters2 || seg.areaMeters2 || 0),
+        0
+      );
 
-      } catch {
-        return null;
-      }
+      const sqft = areaM2 * 10.7639;
+      return Math.ceil(sqft / 100);
     }
 
-    // -----------------------------
-    // Square buffer
-    // -----------------------------
-    function applySquareBuffer(sq) {
+    function applyBuffer(sq) {
       if (sq <= 15) return sq + 3;
       if (sq <= 25) return sq + 4;
       return sq + 5;
     }
 
-    // -----------------------------
-    // Pricing
-    // -----------------------------
-    const PRICING_PER_SQUARE = {
-      "1": 500,
-      "2": 575,
-      "3": 650
-    };
-
-    const stories = Math.min(Math.max(Number(fields.stories) || 1, 1), 3);
-    const pricePerSquare = PRICING_PER_SQUARE[String(stories)];
-
-    let finalSquares;
+    let measuredSquares;
     let measurementMethod;
 
-    if (fields.squares !== undefined) {
-      finalSquares = Math.ceil(Number(fields.squares));
+    if (squaresIn) {
+      measuredSquares = Math.ceil(Number(squaresIn));
       measurementMethod = "provided";
     } else {
-      if (!fields.address) {
+      if (!address) {
         return res.status(400).json({
           success: false,
-          error: "Address required when squares not provided."
+          error: "Address required for auto-measurement"
         });
       }
 
-      const measured = await measureRoof(fields.address);
-      if (!measured) {
+      const auto = await measureRoof(address);
+      if (!auto) {
         return res.status(200).json({
           success: false,
-          needsEstimator: true,
-          mode: "manual_required",
-          message: "Unable to auto-measure roof."
+          mode: "manual_required"
         });
       }
 
-      finalSquares = applySquareBuffer(measured);
+      measuredSquares = applyBuffer(auto);
       measurementMethod = "google_solar_api_buffered";
     }
 
-    const totalPrice = finalSquares * pricePerSquare;
+    /* ----------------------------
+       PRICING
+    -----------------------------*/
+    const PRICE_PER_SQUARE = {
+      1: 500,
+      2: 575,
+      3: 650
+    };
 
-    // -----------------------------
-    // ✅ CRITICAL GHL WRITE-BACK
-    // -----------------------------
+    const pricePerSquare =
+      PRICE_PER_SQUARE[stories] || PRICE_PER_SQUARE[1];
+
+    const totalEstimate = measuredSquares * pricePerSquare;
+
+    /* ----------------------------
+       🔑 GHL-CRITICAL RESPONSE
+    -----------------------------*/
     return res.status(200).json({
       success: true,
       mode: "retail-estimate",
 
+      // 🔥 THIS IS WHAT FIXES YOUR WORKFLOW
       contact: {
-        total_estimate_: totalPrice
+        total_estimate: totalEstimate
       },
 
+      // optional debug fields
       jobType,
-      roofType: fields.roofType || "not_specified",
+      roofType: roofType || "not_specified",
       stories,
-      squares: finalSquares,
+      squares: measuredSquares,
       pricePerSquare,
-      totalPrice,
-      address: fields.address || "not_provided",
+      totalPrice: totalEstimate,
+      address,
       measurementMethod,
-
-      disclaimer:
-        "Estimate generated using automated satellite data. Final pricing verified during on-site inspection.",
 
       timestamp: new Date().toISOString()
     });
 
   } catch (err) {
+    console.error("SERVER ERROR:", err);
     return res.status(500).json({
       success: false,
-      error: "Internal server error",
-      details: err.message
+      error: "Internal server error"
     });
   }
 }
