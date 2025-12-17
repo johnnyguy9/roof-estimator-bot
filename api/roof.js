@@ -1,7 +1,7 @@
 /**
  * PointWake Roof Estimator Webhook
  * GHL → API → GHL (WRITE BACK)
- * PRODUCTION VERSION - ROOF TYPE PRICING
+ * PRODUCTION VERSION - ENHANCED LOGGING
  */
 
 export default async function handler(req, res) {
@@ -36,6 +36,7 @@ export default async function handler(req, res) {
     console.log("✅ Contact ID:", contactId);
 
     /* ================= INPUT NORMALIZATION ================= */
+    // Prioritize full_address for accurate geocoding
     const address =
       body?.full_address ||
       body?.customData?.full_address ||
@@ -60,13 +61,6 @@ export default async function handler(req, res) {
       body?.squares ||
       null;
 
-    // ADDED: Extract roof type
-    const roofTypeRaw =
-      body?.customData?.roof_type ||
-      body?.["Roof Type"] ||
-      body?.roof_type ||
-      null;
-
     console.log("🔎 Address Resolution Debug:", {
       "full_address (top)": body?.full_address,
       "customData.full_address": body?.customData?.full_address,
@@ -80,26 +74,16 @@ export default async function handler(req, res) {
 
     const stories = normalizeStories(storiesRaw);
     const providedSquares = normalizeSquares(squaresRaw);
-    const roofType = normalizeRoofType(roofTypeRaw); // ADDED
 
     console.log("📍 ADDRESS:", address || "❌ NOT DETECTED");
     console.log("🏠 STORIES:", stories);
-    console.log("🏗️ ROOF TYPE:", roofType); // ADDED
     console.log("📐 PROVIDED SQUARES:", providedSquares || "NOT PROVIDED");
 
-    /* ================= PRICING WITH ROOF TYPE ================= */
-    // UPDATED: New pricing structure
-    const BASE_PRICE_PER_SQUARE = {
-      asphalt: 600,
-      metal: 1000,
-      tile: 2000,
-      clay: 2000
-    };
-
-    const STORY_MULTIPLIER = {
-      1: 1.0,
-      2: 1.15,
-      3: 1.30
+    /* ================= PRICING ================= */
+    const PRICE_PER_SQUARE = {
+      1: 500,
+      2: 575,
+      3: 650
     };
 
     let finalSquares;
@@ -136,21 +120,14 @@ export default async function handler(req, res) {
       console.log("✅ Measured:", measured, "→ Buffered:", finalSquares);
     }
 
-    // UPDATED: Calculate price using roof type + stories
-    const basePricePerSquare = BASE_PRICE_PER_SQUARE[roofType];
-    const storyMultiplier = STORY_MULTIPLIER[stories];
-    const totalEstimate = Math.round(finalSquares * basePricePerSquare * storyMultiplier);
+    const pricePerSquare = PRICE_PER_SQUARE[stories] || PRICE_PER_SQUARE[1];
+    const totalEstimate = roundCurrency(finalSquares * pricePerSquare);
 
-    console.log("💰 PRICING BREAKDOWN:");
-    console.log("   Roof Type:", roofType);
-    console.log("   Base Price/Square:", basePricePerSquare);
-    console.log("   Story Multiplier:", storyMultiplier);
-    console.log("   Final Squares:", finalSquares);
-    console.log("   TOTAL ESTIMATE:", totalEstimate);
+    console.log("💰 TOTAL ESTIMATE:", totalEstimate);
 
     /* ================= GHL WRITE BACK ================= */
     console.log("🚀 Attempting to update GHL with estimate...");
-    const ghlResponse = await updateGhlContact(contactId, totalEstimate, finalSquares, roofType);
+    const ghlResponse = await updateGhlTotalEstimate(contactId, totalEstimate);
 
     console.log("🎉 SUCCESS: Workflow complete!");
     return res.status(200).json({
@@ -159,7 +136,6 @@ export default async function handler(req, res) {
       contactId,
       total_estimate: totalEstimate,
       squares: finalSquares,
-      roof_type: roofType,
       stories,
       ghl: ghlResponse
     });
@@ -177,6 +153,7 @@ export default async function handler(req, res) {
 /* ================= HELPERS ================= */
 
 function buildFullAddress(body) {
+  // Try to construct full address from parts
   const street = body?.address1 || body?.customData?.address || body?.address;
   const city = body?.city;
   const state = body?.state;
@@ -189,6 +166,7 @@ function buildFullAddress(body) {
   if (state) parts.push(state);
   if (zip) parts.push(zip);
 
+  // Only return if we have at least street + city or street + zip
   if (parts.length >= 3) {
     return parts.join(", ");
   }
@@ -210,24 +188,14 @@ function normalizeSquares(val) {
   return Math.ceil(n);
 }
 
-// ADDED: Normalize roof type input
-function normalizeRoofType(val) {
-  if (!val) return "asphalt";
-  
-  const normalized = String(val).toLowerCase().trim();
-  
-  if (normalized.includes("metal")) return "metal";
-  if (normalized.includes("tile")) return "tile";
-  if (normalized.includes("clay")) return "clay";
-  if (normalized.includes("asphalt") || normalized.includes("composition")) return "asphalt";
-  
-  return "asphalt"; // default
-}
-
 function bufferSquares(sq) {
   if (sq <= 15) return sq + 3;
   if (sq <= 25) return sq + 4;
   return sq + 5;
+}
+
+function roundCurrency(num) {
+  return Number(num.toFixed(2));
 }
 
 /* ================= GOOGLE SOLAR ================= */
@@ -296,6 +264,7 @@ async function measureRoofSquaresFromSolar(address) {
     const solar = await solarRes.json();
     console.log("📦 Solar API response keys:", Object.keys(solar).join(", "));
 
+    // Check both possible response paths
     const segments = 
       solar?.solarPotential?.roofSegmentStats ||
       solar?.buildingInsights?.solarPotential?.roofSegmentStats;
@@ -318,6 +287,7 @@ async function measureRoofSquaresFromSolar(address) {
       console.log(`   Segment ${idx + 1}: ${area.toFixed(2)} m²`);
     });
 
+    // Check both possible area field paths
     const totalM2 = segments.reduce((sum, seg) => {
       const area = seg.stats?.areaMeters2 || seg.areaMeters2 || 0;
       return sum + area;
@@ -348,61 +318,36 @@ async function measureRoofSquaresFromSolar(address) {
 }
 
 /* ================= GHL WRITE BACK ================= */
-// UPDATED: Write all three fields back to GHL
-async function updateGhlContact(contactId, total, squares, roofType) {
+
+async function updateGhlTotalEstimate(contactId, total) {
   const token = process.env.GHL_PRIVATE_TOKEN;
-  const fieldKeyEstimate = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY;
-  const fieldKeySquares = process.env.GHL_SQUARES_FIELD_KEY;
-  const fieldKeyRoofType = process.env.GHL_ROOF_TYPE_FIELD_KEY;
+  const fieldKey = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY;
 
   if (!token) {
     console.error("❌ Missing GHL_PRIVATE_TOKEN environment variable");
     throw new Error("Missing GHL_PRIVATE_TOKEN");
   }
-  
-  if (!fieldKeyEstimate) {
+  if (!fieldKey) {
     console.error("❌ Missing GHL_TOTAL_ESTIMATE_FIELD_KEY environment variable");
     throw new Error("Missing GHL_TOTAL_ESTIMATE_FIELD_KEY");
   }
 
-  console.log("📤 Updating GHL contact:", contactId);
-  console.log("   Total Estimate:", total);
-  console.log("   Squares:", squares);
-  console.log("   Roof Type:", roofType);
-  console.log("🔑 Field Keys:");
-  console.log("   - Estimate:", fieldKeyEstimate);
-  console.log("   - Squares:", fieldKeySquares || "NOT SET");
-  console.log("   - Roof Type:", fieldKeyRoofType || "NOT SET");
+  console.log("📤 Updating GHL contact:", contactId, "with estimate:", total);
+  console.log("🔑 Using field key:", fieldKey);
   console.log("🔑 Token prefix:", token.substring(0, 20) + "...");
   console.log("🔑 Token length:", token.length, "chars");
 
+  // CRITICAL: Use v2 endpoint with correct payload structure
   const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
   
-  // UPDATED: Write all three custom fields
-  const customFieldsArray = [
-    {
-      key: fieldKeyEstimate,
-      field_value: String(total)
-    }
-  ];
-  
-  // Only add squares and roof_type if field keys are configured
-  if (fieldKeySquares) {
-    customFieldsArray.push({
-      key: fieldKeySquares,
-      field_value: String(squares)
-    });
-  }
-  
-  if (fieldKeyRoofType) {
-    customFieldsArray.push({
-      key: fieldKeyRoofType,
-      field_value: roofType
-    });
-  }
-  
+  // GHL API requires customFields as an ARRAY of objects
   const payload = {
-    customFields: customFieldsArray
+    customFields: [
+      {
+        key: fieldKey,
+        field_value: String(total)
+      }
+    ]
   };
 
   console.log("📤 Request URL:", url);
@@ -433,8 +378,8 @@ async function updateGhlContact(contactId, total, squares, roofType) {
       console.error("   - Token may be expired - regenerate in GHL");
     } else if (resp.status === 422) {
       console.error("🔴 FIELD KEY ERROR:");
-      console.error("   - Check field keys:", fieldKeyEstimate, fieldKeySquares, fieldKeyRoofType);
-      console.error("   - Check custom fields exist in GHL");
+      console.error("   - Field key may be incorrect:", fieldKey);
+      console.error("   - Check custom field exists in GHL");
     }
     
     throw new Error(JSON.stringify(data));
