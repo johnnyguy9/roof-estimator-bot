@@ -383,7 +383,7 @@ async function updateGhlContact(contactId, total, squares, roofType) {
 
   const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
   
-  // UPDATED: Write all three custom fields
+  // Build custom fields array
   const customFieldsArray = [
     {
       key: fieldKeyEstimate,
@@ -412,6 +412,51 @@ async function updateGhlContact(contactId, total, squares, roofType) {
 
   console.log("📤 Request URL:", url);
   console.log("📤 Payload:", JSON.stringify(payload));
+
+  const resp = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Version: "2021-07-28"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  console.log("📥 GHL API response status:", resp.status, resp.statusText);
+  
+  const data = await resp.json();
+  console.log("📦 GHL API response data:", JSON.stringify(data).substring(0, 500));
+  
+  // Log custom fields specifically to debug
+  if (data.contact?.customFields) {
+    console.log("📋 Custom Fields in Response:");
+    data.contact.customFields.forEach(field => {
+      console.log(`   ID: ${field.id}, Value: ${field.value}`);
+    });
+  }
+  
+  if (!resp.ok) {
+    console.error("❌ GHL UPDATE failed:", resp.status, JSON.stringify(data));
+    
+    if (resp.status === 401) {
+      console.error("🔴 AUTHENTICATION ERROR:");
+      console.error("   - Verify token is OAuth token (not API key)");
+      console.error("   - Check token has contacts.write permission");
+      console.error("   - Token may be expired - regenerate in GHL");
+    } else if (resp.status === 422) {
+      console.error("🔴 FIELD KEY ERROR:");
+      console.error("   - Check field keys:", fieldKeyEstimate, fieldKeySquares, fieldKeyRoofType);
+      console.error("   - Check custom fields exist in GHL");
+      console.error("   - Try using the field ID instead of field name");
+    }
+    
+    throw new Error(JSON.stringify(data));
+  }
+
+  console.log("✅ GHL updated successfully");
+  return data;
+}
 
   const resp = await fetch(url, {
     method: "PUT",
