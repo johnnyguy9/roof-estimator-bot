@@ -1,7 +1,7 @@
 /**
  * PointWake Roof Estimator Webhook
  * GHL → API → GHL (WRITE BACK)
- * REGRESSION FIXES APPLIED
+ * PRODUCTION VERSION - ALL FIXES APPLIED
  */
 
 export default async function handler(req, res) {
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     console.log("✅ Contact ID:", contactId);
 
     /* ================= INPUT NORMALIZATION ================= */
-    // 🔧 FIXED: Prioritize full_address for geocoding accuracy
+    // Prioritize full_address for accurate geocoding
     const address =
       body?.full_address ||
       body?.customData?.full_address ||
@@ -61,7 +61,6 @@ export default async function handler(req, res) {
       body?.squares ||
       null;
 
-    // 🔧 IMPROVED: Show address resolution details
     console.log("🔎 Address Resolution Debug:", {
       "full_address (top)": body?.full_address,
       "customData.full_address": body?.customData?.full_address,
@@ -224,7 +223,7 @@ async function measureRoofSquaresFromSolar(address) {
     );
     const solar = await solarRes.json();
 
-    // 🔧 FIXED: Check both possible response paths
+    // Check both possible response paths
     const segments = 
       solar?.solarPotential?.roofSegmentStats ||
       solar?.buildingInsights?.solarPotential?.roofSegmentStats;
@@ -236,7 +235,7 @@ async function measureRoofSquaresFromSolar(address) {
 
     console.log("✅ Found", segments.length, "roof segments");
 
-    // 🔧 FIXED: Check both possible area field paths
+    // Check both possible area field paths
     const totalM2 = segments.reduce((sum, seg) => {
       const area = seg.stats?.areaMeters2 || seg.areaMeters2 || 0;
       return sum + area;
@@ -263,35 +262,37 @@ async function measureRoofSquaresFromSolar(address) {
 async function updateGhlTotalEstimate(contactId, total) {
   const token = process.env.GHL_PRIVATE_TOKEN;
   const fieldKey = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY;
-  const locationId = process.env.GHL_LOCATION_ID; // Optional but recommended
 
-  if (!token) throw new Error("Missing GHL_PRIVATE_TOKEN");
-  if (!fieldKey) throw new Error("Missing GHL_TOTAL_ESTIMATE_FIELD_KEY");
+  if (!token) {
+    console.error("❌ Missing GHL_PRIVATE_TOKEN environment variable");
+    throw new Error("Missing GHL_PRIVATE_TOKEN");
+  }
+  if (!fieldKey) {
+    console.error("❌ Missing GHL_TOTAL_ESTIMATE_FIELD_KEY environment variable");
+    throw new Error("Missing GHL_TOTAL_ESTIMATE_FIELD_KEY");
+  }
 
   console.log("📤 Updating GHL contact:", contactId, "with estimate:", total);
+  console.log("🔑 Using field key:", fieldKey);
 
-  // 🔧 FIX: Use correct API endpoint for Version 2021-07-28
-  const url = `https://rest.gohighlevel.com/v1/contacts/${contactId}`;
+  // CRITICAL: Use v2 endpoint - OAuth tokens ONLY work here
+  const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
   
   const payload = {
     customField: {
-      [fieldKey]: String(total) // GHL expects string for custom fields
+      [fieldKey]: total
     }
   };
-
-  // Add locationId if available (recommended for API v1)
-  if (locationId) {
-    payload.locationId = locationId;
-  }
 
   console.log("📤 Request URL:", url);
   console.log("📤 Payload:", JSON.stringify(payload));
 
   const resp = await fetch(url, {
-    method: "PUT", // v1 uses PUT, not PATCH
+    method: "PUT",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      Version: "2021-07-28"
     },
     body: JSON.stringify(payload)
   });
@@ -300,6 +301,18 @@ async function updateGhlTotalEstimate(contactId, total) {
   
   if (!resp.ok) {
     console.error("❌ GHL UPDATE failed:", resp.status, JSON.stringify(data));
+    
+    if (resp.status === 401) {
+      console.error("🔴 AUTHENTICATION ERROR:");
+      console.error("   - Verify token is OAuth token (not API key)");
+      console.error("   - Check token has contacts.write permission");
+      console.error("   - Token may be expired - regenerate in GHL");
+    } else if (resp.status === 422) {
+      console.error("🔴 FIELD KEY ERROR:");
+      console.error("   - Field key may be incorrect:", fieldKey);
+      console.error("   - Check custom field exists in GHL");
+    }
+    
     throw new Error(JSON.stringify(data));
   }
 
