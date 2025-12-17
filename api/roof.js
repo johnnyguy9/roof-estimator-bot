@@ -150,7 +150,7 @@ export default async function handler(req, res) {
 
     /* ================= GHL WRITE BACK ================= */
     console.log("🚀 Attempting to update GHL with estimate...");
-    const ghlResponse = await updateGhlContact(contactId, totalEstimate, finalSquares, roofType);
+    const ghlResponse = await updateGhlTotalEstimate(contactId, totalEstimate);
 
     console.log("🎉 SUCCESS: Workflow complete!");
     return res.status(200).json({
@@ -348,66 +348,38 @@ async function measureRoofSquaresFromSolar(address) {
 }
 
 /* ================= GHL WRITE BACK ================= */
-// UPDATED: Write all three fields back to GHL
-async function updateGhlContact(contactId, total, squares, roofType) {
+
+async function updateGhlTotalEstimate(contactId, total) {
   const token = process.env.GHL_PRIVATE_TOKEN;
-  let fieldKeyEstimate = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY;
-  let fieldKeySquares = process.env.GHL_SQUARES_FIELD_KEY;
-  let fieldKeyRoofType = process.env.GHL_ROOF_TYPE_FIELD_KEY;
+  const fieldKey = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY;
 
   if (!token) {
     console.error("❌ Missing GHL_PRIVATE_TOKEN environment variable");
     throw new Error("Missing GHL_PRIVATE_TOKEN");
   }
-  
-  if (!fieldKeyEstimate) {
+  if (!fieldKey) {
     console.error("❌ Missing GHL_TOTAL_ESTIMATE_FIELD_KEY environment variable");
     throw new Error("Missing GHL_TOTAL_ESTIMATE_FIELD_KEY");
   }
-  
-  // Strip "contact." prefix if present (GHL API doesn't need it)
-  fieldKeyEstimate = fieldKeyEstimate.replace(/^contact\./, '');
-  if (fieldKeySquares) fieldKeySquares = fieldKeySquares.replace(/^contact\./, '');
-  if (fieldKeyRoofType) fieldKeyRoofType = fieldKeyRoofType.replace(/^contact\./, '');
 
-  console.log("📤 Updating GHL contact:", contactId);
-  console.log("   Total Estimate:", total);
-  console.log("   Squares:", squares);
-  console.log("   Roof Type:", roofType);
-  console.log("🔑 Field Keys (after stripping contact. prefix):");
-  console.log("   - Estimate:", fieldKeyEstimate);
-  console.log("   - Squares:", fieldKeySquares || "NOT SET");
-  console.log("   - Roof Type:", fieldKeyRoofType || "NOT SET");
+  console.log("📤 Updating GHL contact:", contactId, "with estimate:", total);
+  console.log("🔑 Using field key:", fieldKey);
   console.log("🔑 Token prefix:", token.substring(0, 20) + "...");
   console.log("🔑 Token length:", token.length, "chars");
 
+  // Use v2 endpoint with correct payload structure
   const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
   
-  // Build custom fields array
-  const customFieldsArray = [
-    {
-      key: fieldKeyEstimate,
-      field_value: String(total)
-    }
-  ];
-  
-  // Only add squares and roof_type if field keys are configured
-  if (fieldKeySquares) {
-    customFieldsArray.push({
-      key: fieldKeySquares,
-      field_value: String(squares)
-    });
-  }
-  
-  if (fieldKeyRoofType) {
-    customFieldsArray.push({
-      key: fieldKeyRoofType,
-      field_value: roofType
-    });
-  }
+  // Strip "contact." prefix if present
+  const cleanFieldKey = fieldKey.replace(/^contact\./, '');
   
   const payload = {
-    customFields: customFieldsArray
+    customFields: [
+      {
+        key: cleanFieldKey,
+        field_value: String(total)
+      }
+    ]
   };
 
   console.log("📤 Request URL:", url);
@@ -426,31 +398,10 @@ async function updateGhlContact(contactId, total, squares, roofType) {
   console.log("📥 GHL API response status:", resp.status, resp.statusText);
   
   const data = await resp.json();
-  console.log("📦 GHL API response data:", JSON.stringify(data).substring(0, 500));
-  
-  // Log custom fields specifically to debug
-  if (data.contact?.customFields) {
-    console.log("📋 Custom Fields in Response:");
-    data.contact.customFields.forEach(field => {
-      console.log(`   ID: ${field.id}, Value: ${field.value}`);
-    });
-  }
+  console.log("📦 GHL API response data:", JSON.stringify(data).substring(0, 200));
   
   if (!resp.ok) {
     console.error("❌ GHL UPDATE failed:", resp.status, JSON.stringify(data));
-    
-    if (resp.status === 401) {
-      console.error("🔴 AUTHENTICATION ERROR:");
-      console.error("   - Verify token is OAuth token (not API key)");
-      console.error("   - Check token has contacts.write permission");
-      console.error("   - Token may be expired - regenerate in GHL");
-    } else if (resp.status === 422) {
-      console.error("🔴 FIELD KEY ERROR:");
-      console.error("   - Check field keys:", fieldKeyEstimate, fieldKeySquares, fieldKeyRoofType);
-      console.error("   - Check custom fields exist in GHL");
-      console.error("   - Try using the field ID instead of field name");
-    }
-    
     throw new Error(JSON.stringify(data));
   }
 
