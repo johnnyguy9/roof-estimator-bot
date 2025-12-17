@@ -241,33 +241,43 @@ async function measureRoofSquaresFromSolar(address) {
 async function updateGhlTotalEstimate(contactId, total) {
   const token = process.env.GHL_PRIVATE_TOKEN;
   const fieldKey = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY;
+  const locationId = process.env.GHL_LOCATION_ID; // Optional but recommended
 
   if (!token) throw new Error("Missing GHL_PRIVATE_TOKEN");
   if (!fieldKey) throw new Error("Missing GHL_TOTAL_ESTIMATE_FIELD_KEY");
 
   console.log("📤 Updating GHL contact:", contactId, "with estimate:", total);
 
-  const resp = await fetch(
-    `https://services.leadconnectorhq.com/contacts/${contactId}`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        Version: "2021-07-28"
-      },
-      body: JSON.stringify({
-        customFields: {
-          [fieldKey]: Number(total)
-        }
-      })
+  // 🔧 FIX: Use correct API endpoint for Version 2021-07-28
+  const url = `https://rest.gohighlevel.com/v1/contacts/${contactId}`;
+  
+  const payload = {
+    customField: {
+      [fieldKey]: String(total) // GHL expects string for custom fields
     }
-  );
+  };
+
+  // Add locationId if available (recommended for API v1)
+  if (locationId) {
+    payload.locationId = locationId;
+  }
+
+  console.log("📤 Request URL:", url);
+  console.log("📤 Payload:", JSON.stringify(payload));
+
+  const resp = await fetch(url, {
+    method: "PUT", // v1 uses PUT, not PATCH
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
 
   const data = await resp.json();
   
   if (!resp.ok) {
-    console.error("❌ GHL PATCH failed:", resp.status, JSON.stringify(data));
+    console.error("❌ GHL UPDATE failed:", resp.status, JSON.stringify(data));
     throw new Error(JSON.stringify(data));
   }
 
