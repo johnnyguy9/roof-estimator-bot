@@ -340,9 +340,11 @@ async function updateGhlTotalEstimate(contactId, total) {
   // CRITICAL: Use v2 endpoint with correct payload structure
   const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
   
-  // For Private Integration Tokens, use this payload structure
+  // Try customFields (plural) structure for Private Integration Token
   const payload = {
-    [fieldKey]: total
+    customFields: {
+      [fieldKey]: total
+    }
   };
 
   console.log("📤 Request URL:", url);
@@ -352,7 +354,8 @@ async function updateGhlTotalEstimate(contactId, total) {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      Version: "2021-07-28"
     },
     body: JSON.stringify(payload)
   });
