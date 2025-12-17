@@ -351,40 +351,58 @@ async function measureRoofSquaresFromSolar(address) {
 // UPDATED: Write all three fields back to GHL
 async function updateGhlContact(contactId, total, squares, roofType) {
   const token = process.env.GHL_PRIVATE_TOKEN;
-  const fieldKeyEstimate = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY || "total_estimate_";
-  const fieldKeySquares = process.env.GHL_SQUARES_FIELD_KEY || "squares";
-  const fieldKeyRoofType = process.env.GHL_ROOF_TYPE_FIELD_KEY || "roof_type";
+  const fieldKeyEstimate = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY;
+  const fieldKeySquares = process.env.GHL_SQUARES_FIELD_KEY;
+  const fieldKeyRoofType = process.env.GHL_ROOF_TYPE_FIELD_KEY;
 
   if (!token) {
     console.error("❌ Missing GHL_PRIVATE_TOKEN environment variable");
     throw new Error("Missing GHL_PRIVATE_TOKEN");
+  }
+  
+  if (!fieldKeyEstimate) {
+    console.error("❌ Missing GHL_TOTAL_ESTIMATE_FIELD_KEY environment variable");
+    throw new Error("Missing GHL_TOTAL_ESTIMATE_FIELD_KEY");
   }
 
   console.log("📤 Updating GHL contact:", contactId);
   console.log("   Total Estimate:", total);
   console.log("   Squares:", squares);
   console.log("   Roof Type:", roofType);
+  console.log("🔑 Field Keys:");
+  console.log("   - Estimate:", fieldKeyEstimate);
+  console.log("   - Squares:", fieldKeySquares || "NOT SET");
+  console.log("   - Roof Type:", fieldKeyRoofType || "NOT SET");
   console.log("🔑 Token prefix:", token.substring(0, 20) + "...");
   console.log("🔑 Token length:", token.length, "chars");
 
   const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
   
   // UPDATED: Write all three custom fields
+  const customFieldsArray = [
+    {
+      key: fieldKeyEstimate,
+      field_value: String(total)
+    }
+  ];
+  
+  // Only add squares and roof_type if field keys are configured
+  if (fieldKeySquares) {
+    customFieldsArray.push({
+      key: fieldKeySquares,
+      field_value: String(squares)
+    });
+  }
+  
+  if (fieldKeyRoofType) {
+    customFieldsArray.push({
+      key: fieldKeyRoofType,
+      field_value: roofType
+    });
+  }
+  
   const payload = {
-    customFields: [
-      {
-        key: fieldKeyEstimate,
-        field_value: String(total)
-      },
-      {
-        key: fieldKeySquares,
-        field_value: String(squares)
-      },
-      {
-        key: fieldKeyRoofType,
-        field_value: roofType
-      }
-    ]
+    customFields: customFieldsArray
   };
 
   console.log("📤 Request URL:", url);
