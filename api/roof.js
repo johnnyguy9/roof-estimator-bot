@@ -1,7 +1,7 @@
 /**
  * PointWake Roof Estimator Webhook
  * GHL → API → GHL (WRITE BACK)
- * FINAL STABLE VERSION — ADDRESS REGRESSION FIXED
+ * REGRESSION FIXES APPLIED
  */
 
 export default async function handler(req, res) {
@@ -36,13 +36,16 @@ export default async function handler(req, res) {
     console.log("✅ Contact ID:", contactId);
 
     /* ================= INPUT NORMALIZATION ================= */
-    // 🔑 THIS IS THE FIX — ALWAYS READ FROM customData FIRST
+    // 🔧 FIXED: Expanded address resolution with all GHL payload paths
     const address =
       body?.customData?.address ||
       body?.customData?.full_address ||
       body?.full_address ||
+      body?.address ||
       body?.address1 ||
+      body?.contact?.address ||
       body?.contact?.address1 ||
+      body?.contact?.full_address ||
       null;
 
     const storiesRaw =
@@ -57,15 +60,23 @@ export default async function handler(req, res) {
       body?.squares ||
       null;
 
-    console.log("🔎 Address Debug:", {
-      customData: body?.customData,
-      resolvedAddress: address
+    // 🔧 IMPROVED: Show ALL address-related fields for debugging
+    console.log("🔎 Address Resolution Debug:", {
+      "customData.address": body?.customData?.address,
+      "customData.full_address": body?.customData?.full_address,
+      "full_address": body?.full_address,
+      "address": body?.address,
+      "address1": body?.address1,
+      "contact.address": body?.contact?.address,
+      "contact.address1": body?.contact?.address1,
+      "contact.full_address": body?.contact?.full_address,
+      "→ RESOLVED": address
     });
 
     const stories = normalizeStories(storiesRaw);
     const providedSquares = normalizeSquares(squaresRaw);
 
-    console.log("📍 ADDRESS:", address || "NOT PROVIDED");
+    console.log("📍 ADDRESS:", address || "❌ NOT DETECTED");
     console.log("🏠 STORIES:", stories);
     console.log("📐 PROVIDED SQUARES:", providedSquares || "NOT PROVIDED");
 
@@ -83,7 +94,7 @@ export default async function handler(req, res) {
       console.log("✅ Using provided squares:", finalSquares);
     } else {
       if (!address) {
-        console.log("⚠️ No address — cannot calculate");
+        console.log("⚠️ No address detected — cannot calculate");
         return res.status(200).json({
           ok: true,
           updated: false,
@@ -91,11 +102,11 @@ export default async function handler(req, res) {
         });
       }
 
-      console.log("🔍 Measuring roof via Google Solar...");
+      console.log("🔍 Measuring roof via Google Solar for:", address);
       const measured = await measureRoofSquaresFromSolar(address);
 
       if (!measured) {
-        console.log("❌ Solar measurement failed");
+        console.log("❌ Solar measurement failed for:", address);
         return res.status(200).json({
           ok: true,
           updated: false,
@@ -104,7 +115,7 @@ export default async function handler(req, res) {
       }
 
       finalSquares = bufferSquares(measured);
-      console.log("✅ Final squares after buffer:", finalSquares);
+      console.log("✅ Measured:", measured, "→ Buffered:", finalSquares);
     }
 
     const pricePerSquare = PRICE_PER_SQUARE[stories] || PRICE_PER_SQUARE[1];
@@ -165,28 +176,64 @@ function roundCurrency(num) {
 
 async function measureRoofSquaresFromSolar(address) {
   const key = process.env.GOOGLE_MAPS_API_KEY;
-  if (!key) return null;
+  if (!key) {
+    console.error("❌ GOOGLE_MAPS_API_KEY not configured");
+    return null;
+  }
 
-  const geoRes = await fetch(
-    `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${key}`
-  );
-  const geo = await geoRes.json();
-  if (geo.status !== "OK") return null;
+  try {
+    // Step 1: Geocode
+    const geoRes = await fetch(
+      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${key}`
+    );
+    const geo = await geoRes.json();
+    
+    if (geo.status !== "OK") {
+      console.error("❌ Geocoding failed:", geo.status, geo.error_message);
+      return null;
+    }
 
-  const { lat, lng } = geo.results[0].geometry.location;
+    const { lat, lng } = geo.results[0].geometry.location;
+    console.log("✅ Geocoded:", { lat, lng });
 
-  const solarRes = await fetch(
-    `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${lat}&location.longitude=${lng}&key=${key}`
-  );
-  const solar = await solarRes.json();
+    // Step 2: Solar API
+    const solarRes = await fetch(
+      `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${lat}&location.longitude=${lng}&key=${key}`
+    );
+    const solar = await solarRes.json();
 
-  const segments = solar?.solarPotential?.roofSegmentStats;
-  if (!segments?.length) return null;
+    // 🔧 FIXED: Check both possible response paths
+    const segments = 
+      solar?.solarPotential?.roofSegmentStats ||
+      solar?.buildingInsights?.solarPotential?.roofSegmentStats;
 
-  const totalM2 = segments.reduce((s, r) => s + (r.areaMeters2 || 0), 0);
-  if (!totalM2) return null;
+    if (!segments?.length) {
+      console.error("❌ No roof segments found in Solar API response");
+      return null;
+    }
 
-  return Math.ceil((totalM2 * 10.7639) / 100);
+    console.log("✅ Found", segments.length, "roof segments");
+
+    // 🔧 FIXED: Check both possible area field paths
+    const totalM2 = segments.reduce((sum, seg) => {
+      const area = seg.stats?.areaMeters2 || seg.areaMeters2 || 0;
+      return sum + area;
+    }, 0);
+
+    if (!totalM2) {
+      console.error("❌ Total area is 0");
+      return null;
+    }
+
+    const squares = Math.ceil((totalM2 * 10.7639) / 100);
+    console.log("✅ Solar calculated:", totalM2, "m² →", squares, "squares");
+    
+    return squares;
+
+  } catch (err) {
+    console.error("❌ Solar API error:", err.message);
+    return null;
+  }
 }
 
 /* ================= GHL WRITE BACK ================= */
@@ -197,6 +244,8 @@ async function updateGhlTotalEstimate(contactId, total) {
 
   if (!token) throw new Error("Missing GHL_PRIVATE_TOKEN");
   if (!fieldKey) throw new Error("Missing GHL_TOTAL_ESTIMATE_FIELD_KEY");
+
+  console.log("📤 Updating GHL contact:", contactId, "with estimate:", total);
 
   const resp = await fetch(
     `https://services.leadconnectorhq.com/contacts/${contactId}`,
@@ -216,6 +265,12 @@ async function updateGhlTotalEstimate(contactId, total) {
   );
 
   const data = await resp.json();
-  if (!resp.ok) throw new Error(JSON.stringify(data));
+  
+  if (!resp.ok) {
+    console.error("❌ GHL PATCH failed:", resp.status, JSON.stringify(data));
+    throw new Error(JSON.stringify(data));
+  }
+
+  console.log("✅ GHL updated successfully");
   return data;
 }
