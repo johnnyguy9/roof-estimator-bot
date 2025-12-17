@@ -353,11 +353,12 @@ async function updateGhlTotalEstimate(contactId, total) {
   
   const cleanFieldKey = fieldKey.replace(/^contact\./, '');
   
+  // For monetary fields, send as number without dollar sign
   const payload = {
     customFields: [
       {
         key: cleanFieldKey,
-        field_value: String(total)
+        field_value: total  // Send as number, not string
       }
     ]
   };
