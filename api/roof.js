@@ -1,7 +1,7 @@
 /**
  * PointWake Roof Estimator Webhook
  * GHL → API → GHL (WRITE BACK)
- * PRODUCTION VERSION - ALL FIXES APPLIED
+ * PRODUCTION VERSION - ENHANCED LOGGING
  */
 
 export default async function handler(req, res) {
@@ -97,7 +97,8 @@ export default async function handler(req, res) {
         return res.status(200).json({
           ok: true,
           updated: false,
-          reason: "No address provided"
+          reason: "No address provided",
+          debug: "Check customData.address or full_address field"
         });
       }
 
@@ -109,7 +110,9 @@ export default async function handler(req, res) {
         return res.status(200).json({
           ok: true,
           updated: false,
-          reason: "Solar measurement failed"
+          reason: "Solar measurement failed",
+          address: address,
+          debug: "Check logs for geocoding or Solar API errors"
         });
       }
 
@@ -123,8 +126,10 @@ export default async function handler(req, res) {
     console.log("💰 TOTAL ESTIMATE:", totalEstimate);
 
     /* ================= GHL WRITE BACK ================= */
+    console.log("🚀 Attempting to update GHL with estimate...");
     const ghlResponse = await updateGhlTotalEstimate(contactId, totalEstimate);
 
+    console.log("🎉 SUCCESS: Workflow complete!");
     return res.status(200).json({
       ok: true,
       updated: true,
@@ -197,43 +202,90 @@ function roundCurrency(num) {
 
 async function measureRoofSquaresFromSolar(address) {
   const key = process.env.GOOGLE_MAPS_API_KEY;
+  
+  console.log("🔍 Starting Solar measurement process...");
+  console.log("📍 Input address:", address);
+  
   if (!key) {
-    console.error("❌ GOOGLE_MAPS_API_KEY not configured");
+    console.error("❌ GOOGLE_MAPS_API_KEY not configured in environment variables");
     return null;
   }
+  
+  console.log("✅ Google API key found (length:", key.length, "chars)");
 
   try {
     // Step 1: Geocode
-    const geoRes = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${key}`
-    );
+    console.log("📡 Step 1: Calling Geocoding API...");
+    const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${key}`;
+    console.log("🌐 Geocoding URL:", geoUrl.replace(key, "***API_KEY***"));
+    
+    const geoRes = await fetch(geoUrl);
+    console.log("📥 Geocoding response status:", geoRes.status, geoRes.statusText);
+    
     const geo = await geoRes.json();
+    console.log("📦 Geocoding response status field:", geo.status);
     
     if (geo.status !== "OK") {
-      console.error("❌ Geocoding failed:", geo.status, geo.error_message);
+      console.error("❌ Geocoding failed with status:", geo.status);
+      if (geo.error_message) {
+        console.error("❌ Error message:", geo.error_message);
+      }
+      if (geo.status === "ZERO_RESULTS") {
+        console.error("❌ Address not found. Check if address is valid and complete.");
+      } else if (geo.status === "REQUEST_DENIED") {
+        console.error("❌ API request denied. Check API key permissions and billing.");
+      } else if (geo.status === "OVER_QUERY_LIMIT") {
+        console.error("❌ API quota exceeded. Check Google Cloud Console.");
+      }
       return null;
     }
 
     const { lat, lng } = geo.results[0].geometry.location;
-    console.log("✅ Geocoded:", { lat, lng });
+    const formattedAddress = geo.results[0].formatted_address;
+    console.log("✅ Geocoded successfully:");
+    console.log("   Coordinates:", { lat, lng });
+    console.log("   Formatted address:", formattedAddress);
 
     // Step 2: Solar API
-    const solarRes = await fetch(
-      `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${lat}&location.longitude=${lng}&key=${key}`
-    );
+    console.log("📡 Step 2: Calling Solar API...");
+    const solarUrl = `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${lat}&location.longitude=${lng}&key=${key}`;
+    console.log("🌐 Solar API URL:", solarUrl.replace(key, "***API_KEY***"));
+    
+    const solarRes = await fetch(solarUrl);
+    console.log("📥 Solar API response status:", solarRes.status, solarRes.statusText);
+    
+    if (!solarRes.ok) {
+      console.error("❌ Solar API returned error status:", solarRes.status);
+      const errorText = await solarRes.text();
+      console.error("❌ Solar API error response:", errorText);
+      return null;
+    }
+    
     const solar = await solarRes.json();
+    console.log("📦 Solar API response keys:", Object.keys(solar).join(", "));
 
     // Check both possible response paths
     const segments = 
       solar?.solarPotential?.roofSegmentStats ||
       solar?.buildingInsights?.solarPotential?.roofSegmentStats;
 
-    if (!segments?.length) {
-      console.error("❌ No roof segments found in Solar API response");
+    if (!segments) {
+      console.error("❌ No roof segments found in response");
+      console.error("   Response structure:", JSON.stringify(solar, null, 2).substring(0, 500));
+      return null;
+    }
+    
+    if (!segments.length) {
+      console.error("❌ Roof segments array is empty");
       return null;
     }
 
     console.log("✅ Found", segments.length, "roof segments");
+    console.log("   Segment details:");
+    segments.forEach((seg, idx) => {
+      const area = seg.stats?.areaMeters2 || seg.areaMeters2 || 0;
+      console.log(`   Segment ${idx + 1}: ${area.toFixed(2)} m²`);
+    });
 
     // Check both possible area field paths
     const totalM2 = segments.reduce((sum, seg) => {
@@ -241,18 +293,26 @@ async function measureRoofSquaresFromSolar(address) {
       return sum + area;
     }, 0);
 
-    if (!totalM2) {
-      console.error("❌ Total area is 0");
+    if (!totalM2 || totalM2 <= 0) {
+      console.error("❌ Total area calculated as zero or invalid");
       return null;
     }
 
-    const squares = Math.ceil((totalM2 * 10.7639) / 100);
-    console.log("✅ Solar calculated:", totalM2, "m² →", squares, "squares");
+    const sqft = totalM2 * 10.7639;
+    const squares = Math.ceil(sqft / 100);
+    
+    console.log("✅ Solar measurement complete:");
+    console.log("   Total area:", totalM2.toFixed(2), "m²");
+    console.log("   Converted:", sqft.toFixed(2), "sqft");
+    console.log("   Roofing squares:", squares);
     
     return squares;
 
   } catch (err) {
-    console.error("❌ Solar API error:", err.message);
+    console.error("❌ Exception during Solar API call:");
+    console.error("   Error type:", err.name);
+    console.error("   Error message:", err.message);
+    console.error("   Stack trace:", err.stack);
     return null;
   }
 }
@@ -274,6 +334,8 @@ async function updateGhlTotalEstimate(contactId, total) {
 
   console.log("📤 Updating GHL contact:", contactId, "with estimate:", total);
   console.log("🔑 Using field key:", fieldKey);
+  console.log("🔑 Token prefix:", token.substring(0, 20) + "...");
+  console.log("🔑 Token length:", token.length, "chars");
 
   // CRITICAL: Use v2 endpoint - OAuth tokens ONLY work here
   const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
@@ -297,7 +359,10 @@ async function updateGhlTotalEstimate(contactId, total) {
     body: JSON.stringify(payload)
   });
 
+  console.log("📥 GHL API response status:", resp.status, resp.statusText);
+  
   const data = await resp.json();
+  console.log("📦 GHL API response data:", JSON.stringify(data).substring(0, 200));
   
   if (!resp.ok) {
     console.error("❌ GHL UPDATE failed:", resp.status, JSON.stringify(data));
