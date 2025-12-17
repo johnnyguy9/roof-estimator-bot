@@ -340,11 +340,14 @@ async function updateGhlTotalEstimate(contactId, total) {
   // CRITICAL: Use v2 endpoint with correct payload structure
   const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
   
-  // Try customFields (plural) structure for Private Integration Token
+  // GHL API requires customFields as an ARRAY of objects
   const payload = {
-    customFields: {
-      [fieldKey]: total
-    }
+    customFields: [
+      {
+        key: fieldKey,
+        field_value: String(total)
+      }
+    ]
   };
 
   console.log("📤 Request URL:", url);
