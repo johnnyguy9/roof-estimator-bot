@@ -82,17 +82,38 @@ export default async function handler(req, res) {
     console.log("🏗️ ROOF TYPE:", roofType);
     console.log("📐 PROVIDED SQUARES:", providedSquares || "NOT PROVIDED");
 
-    const BASE_PRICE_PER_SQUARE = {
-      asphalt: 600,
-      metal: 1000,
-      tile: 2000,
-      clay: 2000
-    };
-
-    const STORY_MULTIPLIER = {
-      1: 1.0,
-      2: 1.15,
-      3: 1.30
+    // Pricing per square by roof type and stories
+    const PRICING = {
+      asphalt: {
+        1: 400,
+        2: 450,
+        3: 500
+      },
+      metal: {
+        1: 900,
+        2: 1000,
+        3: 1100
+      },
+      tile: {
+        1: 1800,
+        2: 1950,
+        3: 2100
+      },
+      clay: {
+        1: 1800,
+        2: 1950,
+        3: 2100
+      },
+      flat: {
+        1: 900,
+        2: 1000,
+        3: 1100
+      },
+      wood: {
+        1: 1800,
+        2: 1950,
+        3: 2100
+      }
     };
 
     let finalSquares;
@@ -129,14 +150,14 @@ export default async function handler(req, res) {
       console.log("✅ Measured:", measured, "→ Buffered:", finalSquares);
     }
 
-    const basePricePerSquare = BASE_PRICE_PER_SQUARE[roofType];
-    const storyMultiplier = STORY_MULTIPLIER[stories];
-    const totalEstimate = Math.round(finalSquares * basePricePerSquare * storyMultiplier);
+    // Get price per square based on roof type and stories
+    const pricePerSquare = PRICING[roofType]?.[stories] || PRICING.asphalt[1];
+    const totalEstimate = Math.round(finalSquares * pricePerSquare);
 
     console.log("💰 PRICING BREAKDOWN:");
     console.log("   Roof Type:", roofType);
-    console.log("   Base Price/Square:", basePricePerSquare);
-    console.log("   Story Multiplier:", storyMultiplier);
+    console.log("   Stories:", stories);
+    console.log("   Price/Square:", pricePerSquare);
     console.log("   Final Squares:", finalSquares);
     console.log("   TOTAL ESTIMATE:", totalEstimate);
 
@@ -205,11 +226,12 @@ function normalizeRoofType(val) {
   const normalized = String(val).toLowerCase().trim();
   
   if (normalized.includes("metal")) return "metal";
-  if (normalized.includes("tile")) return "tile";
-  if (normalized.includes("clay")) return "clay";
+  if (normalized.includes("tile") || normalized.includes("clay") || normalized.includes("concrete")) return "tile";
+  if (normalized.includes("flat") || normalized.includes("tpo")) return "flat";
+  if (normalized.includes("wood") || normalized.includes("shake")) return "wood";
   if (normalized.includes("asphalt") || normalized.includes("composition")) return "asphalt";
   
-  return "asphalt";
+  return "asphalt"; // default
 }
 
 function bufferSquares(sq) {
