@@ -1,6 +1,5 @@
 /**
  * PointWake Roof Estimator Webhook
- * GHL → API → GHL (WRITE BACK)
  * PRODUCTION VERSION - ROOF TYPE PRICING
  */
 
@@ -14,13 +13,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    /* ================= PARSE BODY ================= */
     let body = req.body;
     if (typeof body === "string") body = JSON.parse(body);
 
     console.log("INCOMING BODY:", JSON.stringify(body, null, 2));
 
-    /* ================= CONTACT ID ================= */
     const contactId =
       body?.customData?.contact_id ||
       body?.contact_id ||
@@ -35,7 +32,6 @@ export default async function handler(req, res) {
 
     console.log("✅ Contact ID:", contactId);
 
-    /* ================= INPUT NORMALIZATION ================= */
     const address =
       body?.full_address ||
       body?.customData?.full_address ||
@@ -60,7 +56,6 @@ export default async function handler(req, res) {
       body?.squares ||
       null;
 
-    // ADDED: Extract roof type
     const roofTypeRaw =
       body?.customData?.roof_type ||
       body?.["Roof Type"] ||
@@ -80,15 +75,13 @@ export default async function handler(req, res) {
 
     const stories = normalizeStories(storiesRaw);
     const providedSquares = normalizeSquares(squaresRaw);
-    const roofType = normalizeRoofType(roofTypeRaw); // ADDED
+    const roofType = normalizeRoofType(roofTypeRaw);
 
     console.log("📍 ADDRESS:", address || "❌ NOT DETECTED");
     console.log("🏠 STORIES:", stories);
-    console.log("🏗️ ROOF TYPE:", roofType); // ADDED
+    console.log("🏗️ ROOF TYPE:", roofType);
     console.log("📐 PROVIDED SQUARES:", providedSquares || "NOT PROVIDED");
 
-    /* ================= PRICING WITH ROOF TYPE ================= */
-    // UPDATED: New pricing structure
     const BASE_PRICE_PER_SQUARE = {
       asphalt: 600,
       metal: 1000,
@@ -136,7 +129,6 @@ export default async function handler(req, res) {
       console.log("✅ Measured:", measured, "→ Buffered:", finalSquares);
     }
 
-    // UPDATED: Calculate price using roof type + stories
     const basePricePerSquare = BASE_PRICE_PER_SQUARE[roofType];
     const storyMultiplier = STORY_MULTIPLIER[stories];
     const totalEstimate = Math.round(finalSquares * basePricePerSquare * storyMultiplier);
@@ -148,7 +140,6 @@ export default async function handler(req, res) {
     console.log("   Final Squares:", finalSquares);
     console.log("   TOTAL ESTIMATE:", totalEstimate);
 
-    /* ================= GHL WRITE BACK ================= */
     console.log("🚀 Attempting to update GHL with estimate...");
     const ghlResponse = await updateGhlTotalEstimate(contactId, totalEstimate);
 
@@ -173,8 +164,6 @@ export default async function handler(req, res) {
     });
   }
 }
-
-/* ================= HELPERS ================= */
 
 function buildFullAddress(body) {
   const street = body?.address1 || body?.customData?.address || body?.address;
@@ -210,7 +199,6 @@ function normalizeSquares(val) {
   return Math.ceil(n);
 }
 
-// ADDED: Normalize roof type input
 function normalizeRoofType(val) {
   if (!val) return "asphalt";
   
@@ -221,7 +209,7 @@ function normalizeRoofType(val) {
   if (normalized.includes("clay")) return "clay";
   if (normalized.includes("asphalt") || normalized.includes("composition")) return "asphalt";
   
-  return "asphalt"; // default
+  return "asphalt";
 }
 
 function bufferSquares(sq) {
@@ -229,8 +217,6 @@ function bufferSquares(sq) {
   if (sq <= 25) return sq + 4;
   return sq + 5;
 }
-
-/* ================= GOOGLE SOLAR ================= */
 
 async function measureRoofSquaresFromSolar(address) {
   const key = process.env.GOOGLE_MAPS_API_KEY;
@@ -246,7 +232,6 @@ async function measureRoofSquaresFromSolar(address) {
   console.log("✅ Google API key found (length:", key.length, "chars)");
 
   try {
-    // Step 1: Geocode
     console.log("📡 Step 1: Calling Geocoding API...");
     const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${key}`;
     console.log("🌐 Geocoding URL:", geoUrl.replace(key, "***API_KEY***"));
@@ -278,7 +263,6 @@ async function measureRoofSquaresFromSolar(address) {
     console.log("   Coordinates:", { lat, lng });
     console.log("   Formatted address:", formattedAddress);
 
-    // Step 2: Solar API
     console.log("📡 Step 2: Calling Solar API...");
     const solarUrl = `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${lat}&location.longitude=${lng}&key=${key}`;
     console.log("🌐 Solar API URL:", solarUrl.replace(key, "***API_KEY***"));
@@ -347,8 +331,6 @@ async function measureRoofSquaresFromSolar(address) {
   }
 }
 
-/* ================= GHL WRITE BACK ================= */
-
 async function updateGhlTotalEstimate(contactId, total) {
   const token = process.env.GHL_PRIVATE_TOKEN;
   const fieldKey = process.env.GHL_TOTAL_ESTIMATE_FIELD_KEY;
@@ -367,10 +349,8 @@ async function updateGhlTotalEstimate(contactId, total) {
   console.log("🔑 Token prefix:", token.substring(0, 20) + "...");
   console.log("🔑 Token length:", token.length, "chars");
 
-  // Use v2 endpoint with correct payload structure
   const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
   
-  // Strip "contact." prefix if present
   const cleanFieldKey = fieldKey.replace(/^contact\./, '');
   
   const payload = {
@@ -402,42 +382,6 @@ async function updateGhlTotalEstimate(contactId, total) {
   
   if (!resp.ok) {
     console.error("❌ GHL UPDATE failed:", resp.status, JSON.stringify(data));
-    throw new Error(JSON.stringify(data));
-  }
-
-  console.log("✅ GHL updated successfully");
-  return data;
-}
-
-  const resp = await fetch(url, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      Version: "2021-07-28"
-    },
-    body: JSON.stringify(payload)
-  });
-
-  console.log("📥 GHL API response status:", resp.status, resp.statusText);
-  
-  const data = await resp.json();
-  console.log("📦 GHL API response data:", JSON.stringify(data).substring(0, 200));
-  
-  if (!resp.ok) {
-    console.error("❌ GHL UPDATE failed:", resp.status, JSON.stringify(data));
-    
-    if (resp.status === 401) {
-      console.error("🔴 AUTHENTICATION ERROR:");
-      console.error("   - Verify token is OAuth token (not API key)");
-      console.error("   - Check token has contacts.write permission");
-      console.error("   - Token may be expired - regenerate in GHL");
-    } else if (resp.status === 422) {
-      console.error("🔴 FIELD KEY ERROR:");
-      console.error("   - Check field keys:", fieldKeyEstimate, fieldKeySquares, fieldKeyRoofType);
-      console.error("   - Check custom fields exist in GHL");
-    }
-    
     throw new Error(JSON.stringify(data));
   }
 
