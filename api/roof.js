@@ -345,20 +345,23 @@ async function updateGhlTotalEstimate(contactId, total) {
   }
 
   console.log("📤 Updating GHL contact:", contactId, "with estimate:", total);
-  console.log("🔑 Using field key:", fieldKey);
+  console.log("🔑 Original field key:", fieldKey);
+  
+  // Strip "contact." prefix - GHL API doesn't need it
+  let cleanFieldKey = fieldKey.replace(/^contact\./, '');
+  
+  console.log("🔑 Cleaned field key:", cleanFieldKey);
   console.log("🔑 Token prefix:", token.substring(0, 20) + "...");
   console.log("🔑 Token length:", token.length, "chars");
 
   const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
   
-  const cleanFieldKey = fieldKey.replace(/^contact\./, '');
-  
-  // For monetary fields, send as number without dollar sign
+  // Use key (not id) with the cleaned field key
   const payload = {
     customFields: [
       {
         key: cleanFieldKey,
-        field_value: total  // Send as number, not string
+        field_value: total  // Send as number for Monetary field
       }
     ]
   };
