@@ -36,16 +36,17 @@ export default async function handler(req, res) {
     console.log("✅ Contact ID:", contactId);
 
     /* ================= INPUT NORMALIZATION ================= */
-    // 🔧 FIXED: Expanded address resolution with all GHL payload paths
+    // 🔧 FIXED: Prioritize full_address for geocoding accuracy
     const address =
-      body?.customData?.address ||
-      body?.customData?.full_address ||
       body?.full_address ||
+      body?.customData?.full_address ||
+      body?.contact?.full_address ||
+      buildFullAddress(body) ||
+      body?.customData?.address ||
       body?.address ||
       body?.address1 ||
       body?.contact?.address ||
       body?.contact?.address1 ||
-      body?.contact?.full_address ||
       null;
 
     const storiesRaw =
@@ -60,16 +61,15 @@ export default async function handler(req, res) {
       body?.squares ||
       null;
 
-    // 🔧 IMPROVED: Show ALL address-related fields for debugging
+    // 🔧 IMPROVED: Show address resolution details
     console.log("🔎 Address Resolution Debug:", {
-      "customData.address": body?.customData?.address,
+      "full_address (top)": body?.full_address,
       "customData.full_address": body?.customData?.full_address,
-      "full_address": body?.full_address,
-      "address": body?.address,
       "address1": body?.address1,
-      "contact.address": body?.contact?.address,
-      "contact.address1": body?.contact?.address1,
-      "contact.full_address": body?.contact?.full_address,
+      "customData.address": body?.customData?.address,
+      "city": body?.city,
+      "state": body?.state,
+      "postal_code": body?.postal_code,
       "→ RESOLVED": address
     });
 
@@ -147,6 +147,28 @@ export default async function handler(req, res) {
 }
 
 /* ================= HELPERS ================= */
+
+function buildFullAddress(body) {
+  // Try to construct full address from parts
+  const street = body?.address1 || body?.customData?.address || body?.address;
+  const city = body?.city;
+  const state = body?.state;
+  const zip = body?.postal_code || body?.postalCode;
+
+  if (!street) return null;
+  
+  const parts = [street];
+  if (city) parts.push(city);
+  if (state) parts.push(state);
+  if (zip) parts.push(zip);
+
+  // Only return if we have at least street + city or street + zip
+  if (parts.length >= 3) {
+    return parts.join(", ");
+  }
+
+  return null;
+}
 
 function normalizeStories(val) {
   if (!val) return 1;
