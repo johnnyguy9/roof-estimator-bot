@@ -235,9 +235,9 @@ function normalizeRoofType(val) {
 }
 
 function bufferSquares(sq) {
-  if (sq <= 15) return sq + 3;
-  if (sq <= 25) return sq + 4;
-  return sq + 5;
+  if (sq <= 15) return sq + 6;
+  if (sq <= 25) return sq + 10;
+  return sq + 8;
 }
 
 async function measureRoofSquaresFromSolar(address) {
